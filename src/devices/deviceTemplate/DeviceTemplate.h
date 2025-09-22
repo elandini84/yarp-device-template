@@ -9,6 +9,8 @@
 #include <yarp/dev/DeviceDriver.h>
 #include "DeviceTemplate_ParamsParser.h"
 
+// TODO: add more comments about the class
+
 class DeviceTemplate :
         public yarp::dev::DeviceDriver,
         public DeviceTemplate_ParamsParser
