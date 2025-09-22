@@ -1,6 +1,7 @@
 name: TODO Management
 
 on:
+  workflow_dispatch:
   push:
   pull_request:
     types: [closed]
