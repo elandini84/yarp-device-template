@@ -110,13 +110,16 @@ jobs:
                       if lines:
                           # First line contains commit hash
                           commit_hash = lines[0].split()[0]
-                          # Get short hash (first 7 characters)
-                          return commit_hash[:7]
+                          # Return both full hash and short hash (first 7 characters)
+                          return {
+                              'full_hash': commit_hash,
+                              'short_hash': commit_hash[:7]
+                          }
 
-                  return "unknown"
+                  return {'full_hash': 'unknown', 'short_hash': 'unknown'}
               except Exception as e:
                   print(f"Error getting git blame for {file_path}:{line_number}: {e}")
-                  return "unknown"
+                  return {'full_hash': 'unknown', 'short_hash': 'unknown'}
 
           def scan_file_for_todos(file_path):
               """Scan a file for TODO comments and return list of TODOs with metadata"""
@@ -144,11 +147,12 @@ jobs:
                       if todo_match:
                           todo_text = todo_match.group(1).strip()
                           if todo_text:  # Only include non-empty TODOs
-                              commit_hash = get_git_blame_info(str(file_path), line_num)
+                              commit_info = get_git_blame_info(str(file_path), line_num)
                               todos.append({
                                   'line': line_num,
                                   'text': todo_text,
-                                  'commit_hash': commit_hash,
+                                  'commit_hash': commit_info['short_hash'],
+                                  'commit_hash_full': commit_info['full_hash'],
                                   'full_line': line.strip()
                               })
 
@@ -173,7 +177,7 @@ jobs:
 
               return repo_todos
 
-          def create_issue_body(todos_dict):
+          def create_issue_body(todos_dict, repository_name, default_branch):
               """Create formatted issue body from TODOs dictionary"""
               if not todos_dict:
                   return "No TODO comments found in the repository."
@@ -193,13 +197,20 @@ jobs:
               # Sort files alphabetically
               for file_path in sorted(todos_dict.keys()):
                   todos = todos_dict[file_path]
-                  body += f"## 📁 `{file_path}`\n\n"
+                  # Create GitHub permalink to the file
+                  file_url = f"https://github.com/{repository_name}/blob/{default_branch}/{file_path}"
+                  body += f"## 📁 [`{file_path}`]({file_url})\n\n"
 
                   # Sort TODOs by line number
                   todos.sort(key=lambda x: x['line'])
 
                   for todo in todos:
-                      body += f"- **Line {todo['line']}** (commit `{todo['commit_hash']}`): {todo['text']}\n"
+                      # Create direct link to the specific line
+                      line_url = f"https://github.com/{repository_name}/blob/{default_branch}/{file_path}#L{todo['line']}"
+                      # Create link to commit (use full hash for URL but display short hash)
+                      commit_url = f"https://github.com/{repository_name}/commit/{todo['commit_hash_full']}" if todo['commit_hash_full'] != 'unknown' else '#'
+                      commit_display = f"[`{todo['commit_hash']}`]({commit_url})" if todo['commit_hash'] != 'unknown' else '`unknown`'
+                      body += f"- **[Line {todo['line']}]({line_url})** (commit {commit_display}): {todo['text']}\n"
                       body += f"  ```\n  {todo['full_line']}\n  ```\n\n"
 
                   body += "---\n\n"
@@ -209,6 +220,8 @@ jobs:
 
           - This issue is automatically updated when TODO comments are added, modified, or removed
           - Each TODO item shows the line number and the commit hash where it was introduced
+          - **Click on line numbers** to jump directly to the TODO in the source code
+          - **Click on commit hashes** to view the commit that introduced the TODO
           - To resolve a TODO item, either complete the task and remove the comment, or update it with progress
 
           **Note:** This issue will be automatically updated on every push to the main branch.
@@ -223,6 +236,9 @@ jobs:
 
               g = Github(github_token)
               repo = g.get_repo(repository_name)
+              
+              # Get default branch name for link generation
+              default_branch = repo.default_branch
 
               print("Scanning repository for TODO comments...")
               todos_dict = scan_repository()
@@ -242,8 +258,8 @@ jobs:
                       existing_issue = issue
                       break
 
-              # Create issue body
-              issue_body = create_issue_body(todos_dict)
+              # Create issue body with repository info and default branch
+              issue_body = create_issue_body(todos_dict, repository_name, default_branch)
 
               if todos_dict:
                   if existing_issue:
