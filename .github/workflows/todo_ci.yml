@@ -1,0 +1,234 @@
+name: TODO Management
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+    types: [closed]
+    branches:
+      - master
+      - main
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  scan-todos:
+    name: Scan for TODO Comments
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history for git blame
+          token: ${{ secrets.ACTION_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PyGithub gitpython
+
+      - name: Scan for TODOs and Create/Update Issue
+        env:
+          GITHUB_TOKEN: ${{ secrets.ACTION_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python << 'EOF'
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+          from github import Github
+          from datetime import datetime
+          import json
+
+          def get_git_blame_info(file_path, line_number):
+              """Get commit hash and author info for a specific line"""
+              try:
+                  # Use git blame to get commit info
+                  result = subprocess.run([
+                      'git', 'blame', '-L', f'{line_number},{line_number}', '--porcelain', file_path
+                  ], capture_output=True, text=True, cwd='.')
+
+                  if result.returncode == 0:
+                      lines = result.stdout.strip().split('\n')
+                      if lines:
+                          # First line contains commit hash
+                          commit_hash = lines[0].split()[0]
+                          # Get short hash (first 7 characters)
+                          return commit_hash[:7]
+
+                  return "unknown"
+              except Exception as e:
+                  print(f"Error getting git blame for {file_path}:{line_number}: {e}")
+                  return "unknown"
+
+          def scan_file_for_todos(file_path):
+              """Scan a file for TODO comments and return list of TODOs with metadata"""
+              todos = []
+
+              # Skip certain file types and directories
+              skip_extensions = {'.pyc', '.pyo', '.pyd', '.so', '.dll', '.exe', '.bin', '.obj', '.o', '.a', '.lib'}
+              skip_dirs = {'build', 'build_3.12', '.git', '.github', '__pycache__', 'node_modules', '.vscode'}
+
+              # Check if file should be skipped
+              if file_path.suffix.lower() in skip_extensions:
+                  return todos
+
+              for part in file_path.parts:
+                  if part in skip_dirs:
+                      return todos
+
+              try:
+                  with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                      lines = f.readlines()
+
+                  for line_num, line in enumerate(lines, 1):
+                      # Look for TODO: pattern (case insensitive)
+                      todo_match = re.search(r'TODO:\s*(.*)', line, re.IGNORECASE)
+                      if todo_match:
+                          todo_text = todo_match.group(1).strip()
+                          if todo_text:  # Only include non-empty TODOs
+                              commit_hash = get_git_blame_info(str(file_path), line_num)
+                              todos.append({
+                                  'line': line_num,
+                                  'text': todo_text,
+                                  'commit_hash': commit_hash,
+                                  'full_line': line.strip()
+                              })
+
+              except Exception as e:
+                  print(f"Error reading file {file_path}: {e}")
+
+              return todos
+
+          def scan_repository():
+              """Scan entire repository for TODO comments"""
+              repo_todos = {}
+              repo_path = Path('.')
+
+              # Get all files in repository
+              for file_path in repo_path.rglob('*'):
+                  if file_path.is_file():
+                      todos = scan_file_for_todos(file_path)
+                      if todos:
+                          # Use relative path from repo root
+                          relative_path = str(file_path.relative_to(repo_path))
+                          repo_todos[relative_path] = todos
+
+              return repo_todos
+
+          def create_issue_body(todos_dict):
+              """Create formatted issue body from TODOs dictionary"""
+              if not todos_dict:
+                  return "No TODO comments found in the repository."
+
+              body = f"""# TODO Items Found in Repository
+
+          This issue is automatically generated and contains all TODO comments found in the codebase.
+
+          **Last updated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}
+          **Total files with TODOs:** {len(todos_dict)}
+          **Total TODO items:** {sum(len(todos) for todos in todos_dict.values())}
+
+          ---
+
+          """
+
+              # Sort files alphabetically
+              for file_path in sorted(todos_dict.keys()):
+                  todos = todos_dict[file_path]
+                  body += f"## 📁 `{file_path}`\n\n"
+
+                  # Sort TODOs by line number
+                  todos.sort(key=lambda x: x['line'])
+
+                  for todo in todos:
+                      body += f"- **Line {todo['line']}** (commit `{todo['commit_hash']}`): {todo['text']}\n"
+                      body += f"  ```\n  {todo['full_line']}\n  ```\n\n"
+
+                  body += "---\n\n"
+
+              body += """
+          ## ℹ️ Information
+
+          - This issue is automatically updated when TODO comments are added, modified, or removed
+          - Each TODO item shows the line number and the commit hash where it was introduced
+          - To resolve a TODO item, either complete the task and remove the comment, or update it with progress
+
+          **Note:** This issue will be automatically updated on every push to the main branch.
+          """
+
+              return body
+
+          def main():
+              # Initialize GitHub client
+              github_token = os.environ['GITHUB_TOKEN']
+              repository_name = os.environ['REPOSITORY']
+
+              g = Github(github_token)
+              repo = g.get_repo(repository_name)
+
+              print("Scanning repository for TODO comments...")
+              todos_dict = scan_repository()
+
+              print(f"Found TODOs in {len(todos_dict)} files")
+              for file_path, todos in todos_dict.items():
+                  print(f"  {file_path}: {len(todos)} TODOs")
+
+              # Look for existing TODO issue
+              issue_title = "🔄 TODO Items Tracker"
+              existing_issue = None
+
+              # Search for existing issue
+              issues = repo.get_issues(state='open', labels=[])
+              for issue in issues:
+                  if issue.title == issue_title:
+                      existing_issue = issue
+                      break
+
+              # Create issue body
+              issue_body = create_issue_body(todos_dict)
+
+              if todos_dict:
+                  if existing_issue:
+                      # Update existing issue
+                      print(f"Updating existing issue #{existing_issue.number}")
+                      existing_issue.edit(body=issue_body)
+                      # Add a comment about the update
+                      existing_issue.create_comment(f"🔄 TODO list updated automatically on {datetime.now().strftime('%Y-%m-%d at %H:%M:%S UTC')}")
+                  else:
+                      # Create new issue
+                      print("Creating new TODO tracking issue")
+                      new_issue = repo.create_issue(
+                          title=issue_title,
+                          body=issue_body,
+                          labels=['documentation', 'enhancement', 'automated']
+                      )
+                      print(f"Created issue #{new_issue.number}")
+              else:
+                  if existing_issue:
+                      # Close existing issue if no TODOs found
+                      print(f"No TODOs found, closing issue #{existing_issue.number}")
+                      existing_issue.edit(
+                          body="✅ **All TODO items have been resolved!**\n\nNo TODO comments were found in the repository. This issue will be reopened automatically if new TODO items are added.",
+                          state='closed'
+                      )
+                      existing_issue.create_comment("🎉 All TODO items have been completed! Closing this issue automatically.")
+                  else:
+                      print("No TODOs found and no existing issue to update")
+
+          if __name__ == "__main__":
+              main()
+          EOF
