@@ -124,7 +124,11 @@ jobs:
           def load_gitignore_patterns():
               """Load patterns from .gitignore file"""
               gitignore_patterns = []
-              gitignore_path = Path('.gitignore')
+              # Working directory should be repo root after checkout, but let's be explicit
+              repo_root = Path('.')
+              gitignore_path = repo_root / '.gitignore'
+
+              print(f"Looking for .gitignore at: {gitignore_path.absolute()}")
 
               if gitignore_path.exists():
                   try:
@@ -196,10 +200,11 @@ jobs:
                       lines = f.readlines()
 
                   for line_num, line in enumerate(lines, 1):
-                      # Look for TODO: pattern (case insensitive)
-                      todo_match = re.search(r'TODO:\s*(.*)', line, re.IGNORECASE)
+                      # Look for TODO: pattern at the start of a comment (case insensitive)
+                      # Match various comment styles: //, #, %, !, ;, --, ', ", etc.
+                      todo_match = re.search(r'^\s*([\/]{2}|[#%!;]|--|\*|\'|\"|REM\s)\s*TODO:\s*(.*)', line, re.IGNORECASE)
                       if todo_match:
-                          todo_text = todo_match.group(1).strip()
+                          todo_text = todo_match.group(2).strip()
                           if todo_text:  # Only include non-empty TODOs
                               commit_info = get_git_blame_info(str(file_path), line_num)
                               todos.append({
@@ -219,6 +224,10 @@ jobs:
               """Scan entire repository for TODO comments"""
               repo_todos = {}
               repo_path = Path('.')
+
+              # Debug: Show current working directory
+              print(f"Current working directory: {repo_path.absolute()}")
+              print(f"Directory contents: {list(repo_path.iterdir())[:10]}")  # Show first 10 items
 
               # Load gitignore patterns once
               print("Loading .gitignore patterns...")
