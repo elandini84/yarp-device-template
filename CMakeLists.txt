@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2023 Istituto Italiano di Tecnologia (IIT)
 # SPDX-License-Identifier: BSD-3-Clause
 
-# TODO: update the CMakeLists.txt file below
 cmake_minimum_required(VERSION 3.16)
 project(yarp-device-template
         LANGUAGES CXX
