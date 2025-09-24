@@ -121,21 +121,75 @@ jobs:
                   print(f"Error getting git blame for {file_path}:{line_number}: {e}")
                   return {'full_hash': 'unknown', 'short_hash': 'unknown'}
 
-          def scan_file_for_todos(file_path):
+          def load_gitignore_patterns():
+              """Load patterns from .gitignore file"""
+              gitignore_patterns = []
+              gitignore_path = Path('.gitignore')
+
+              if gitignore_path.exists():
+                  try:
+                      with open(gitignore_path, 'r', encoding='utf-8') as f:
+                          for line in f:
+                              line = line.strip()
+                              # Skip empty lines and comments
+                              if line and not line.startswith('#'):
+                                  gitignore_patterns.append(line)
+                  except Exception as e:
+                      print(f"Error reading .gitignore: {e}")
+
+              # Always exclude some critical directories/files for safety
+              critical_excludes = ['.git', '.git/', '.git/**']
+              gitignore_patterns.extend(critical_excludes)
+
+              return gitignore_patterns
+
+          def should_skip_file(file_path, gitignore_patterns):
+              """Check if file should be skipped based on gitignore patterns"""
+              import fnmatch
+
+              # Convert to string for pattern matching
+              file_str = str(file_path)
+              relative_path = str(file_path.relative_to('.'))
+
+              for pattern in gitignore_patterns:
+                  # Handle directory patterns (ending with /)
+                  if pattern.endswith('/'):
+                      dir_pattern = pattern.rstrip('/')
+                      # Check if any part of the path matches the directory pattern
+                      for part in file_path.parts:
+                          if fnmatch.fnmatch(part, dir_pattern):
+                              return True
+                      # Also check full path for directory patterns
+                      if fnmatch.fnmatch(relative_path + '/', pattern):
+                          return True
+                  else:
+                      # Handle file patterns
+                      # Check full relative path
+                      if fnmatch.fnmatch(relative_path, pattern):
+                          return True
+                      # Check filename only
+                      if fnmatch.fnmatch(file_path.name, pattern):
+                          return True
+                      # Handle patterns with **/ (recursive directory matching)
+                      if '**/' in pattern:
+                          # Convert **/ pattern to work with fnmatch
+                          simple_pattern = pattern.replace('**/', '')
+                          if fnmatch.fnmatch(file_path.name, simple_pattern):
+                              return True
+                          # Also check if pattern matches any part of the path
+                          for part in file_path.parts:
+                              if fnmatch.fnmatch(part, simple_pattern):
+                                  return True
+
+              return False
+
+          def scan_file_for_todos(file_path, gitignore_patterns):
               """Scan a file for TODO comments and return list of TODOs with metadata"""
               todos = []
 
-              # Skip certain file types and directories
-              skip_extensions = {'.pyc', '.pyo', '.pyd', '.so', '.dll', '.exe', '.bin', '.obj', '.o', '.a', '.lib'}
-              skip_dirs = {'build', 'build_3.12', '.git', '.github', '__pycache__', 'node_modules', '.vscode'}
-
-              # Check if file should be skipped
-              if file_path.suffix.lower() in skip_extensions:
+              # Check if file should be skipped based on gitignore patterns
+              if should_skip_file(file_path, gitignore_patterns):
                   return todos
-
-              for part in file_path.parts:
-                  if part in skip_dirs:
-                      return todos
 
               try:
                   with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -166,10 +220,15 @@ jobs:
               repo_todos = {}
               repo_path = Path('.')
 
+              # Load gitignore patterns once
+              print("Loading .gitignore patterns...")
+              gitignore_patterns = load_gitignore_patterns()
+              print(f"Loaded {len(gitignore_patterns)} gitignore patterns")
+
               # Get all files in repository
               for file_path in repo_path.rglob('*'):
                   if file_path.is_file():
-                      todos = scan_file_for_todos(file_path)
+                      todos = scan_file_for_todos(file_path, gitignore_patterns)
                       if todos:
                           # Use relative path from repo root
                           relative_path = str(file_path.relative_to(repo_path))
@@ -236,7 +295,7 @@ jobs:
 
               g = Github(github_token)
               repo = g.get_repo(repository_name)
-              
+
               # Get default branch name for link generation
               default_branch = repo.default_branch
 
