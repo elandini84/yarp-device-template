@@ -334,8 +334,6 @@ jobs:
                       # Update existing issue
                       print(f"Updating existing issue #{existing_issue.number}")
                       existing_issue.edit(body=issue_body)
-                      # Add a comment about the update
-                      existing_issue.create_comment(f"🔄 TODO list updated automatically on {datetime.now().strftime('%Y-%m-%d at %H:%M:%S UTC')}")
                   else:
                       # Create new issue
                       print("Creating new TODO tracking issue")
