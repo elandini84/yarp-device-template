@@ -16,6 +16,7 @@ class DeviceTemplate :
         public DeviceTemplate_ParamsParser
 {
 public:
+    // TODO: add a method to do something useful
     DeviceTemplate();
     DeviceTemplate(const DeviceTemplate&) = delete;
     DeviceTemplate(DeviceTemplate&&) noexcept = delete;
